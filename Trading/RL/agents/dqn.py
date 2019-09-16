@@ -9,10 +9,10 @@ settings = {
             "gamma" : 0.99,
             #Agent:
             "epsilon" : lambda t_now, t_max : 0.01*np.sqrt((t_max+1)/(0.3 * t_now + 1)),
-            "print_every_n_steps" : 1,
-            "train_after_n_steps" : 16,
-            "n_samples_to_train_on" : 16,
-            "reference_update_after_n_updates" : 1,
+            "print_every_n_steps" : 100,
+            "train_after_n_steps" : 64,
+            "n_samples_to_train_on" : 1024,
+            "reference_update_after_n_updates" : 5,
             "minibatch_size" : 64,
             "lr" : 1.0 * 10**-4,
             "reference_update_mode" : "propagate", #swap or propagate
@@ -99,6 +99,11 @@ class agent:
         self.model_0 = model(env, session, "model0")
         self.model_1 = model(env, session, "model1")
 
+    def eval(self, t):
+        s = self.env._reset(t)
+        q = self.get_q(s)
+        return q
+
     def train(self, n_steps):
         #Update timers...
         time_since_ref_update, time_since_training = 0, 0
@@ -137,7 +142,6 @@ class agent:
         ref_string = "" if prints is None else "<"+"="*prints[0]+"-"*(prints[1]-prints[0])+">"
         tot_loss = 0.0
         batch = self.experiences.get_sample(batch_size)
-        new_prios = np.zeros((batch_size,1))
         if type(self.experiences) is prioritized_experience_replay:
             batch, weights, filter = batch
         _s  = np.concatenate([self.model_0.state_unload(x[0]) for x in batch ], axis=0)
@@ -150,16 +154,22 @@ class agent:
         print("[", end='', flush=True)
         for idx in range(0,batch_size, settings["minibatch_size"]):
             high = min(len(batch), idx+settings["minibatch_size"])
-            # print(_s[idx:high,:].shape, _a[idx:high].shape, target[idx:high].shape)
-            _new_prios, loss = self.model_0.update(_s[idx:high,:], _a[idx:high], target[idx:high])
-            new_prios[idx:high] = _new_prios
+            _, loss = self.model_0.update(_s[idx:high,:], _a[idx:high], target[idx:high])
             tot_loss += loss
             print("|",end="", flush=True)
         if type(self.experiences) is prioritized_experience_replay:
-            blah
+            assert False, "prioritized experience replay not implemented yet"
         print("] {} | {}".format(ref_string, tot_loss), flush=True)
 
     def get_action(self,state, epsilon=None):
+        if type(state) is dict:
+            n = 1
+        else:
+            n = len(state)
+        qs = self.get_q(state)
+        return np.argmax(qs, axis=-1).reshape((n,))
+
+    def get_q(self,state, epsilon=None):
         if type(state) is dict:
             n = 1
         else:
@@ -168,7 +178,7 @@ class agent:
             if np.random.uniform() < epsilon:
                 return np.random.randint(3, size=(n,))
         qs = self.model_0.eval(state)
-        return np.argmax(qs, axis=-1).reshape((n,))
+        return qs
 
     def perform_reference_update(self):
         if settings["reference_update_mode"] == "swap":
@@ -177,3 +187,7 @@ class agent:
             self.model_1 = _tmp
         if settings["reference_update_mode"] == "propagate":
             self.model_1.set_weights( self.model_0.get_weights() )
+
+    @property
+    def current_eval(self):
+        return  dict(zip( self.env.actions, self.eval(self.env.t)[0] ))
