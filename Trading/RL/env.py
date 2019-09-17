@@ -17,6 +17,7 @@ class databank:
         #  ['Date', 'Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume']
         if file is not None:
             self.data = pd.read_csv(file, delimiter=',').dropna()
+            self.reset()
         else:
             start_date = '2001-09-06'
             stop_date = dt.datetime.now().strftime("%Y-%m-%d")
@@ -113,9 +114,9 @@ class account:
         return self.cash + self.market.price * self.stock_count
 
 class env:
-    def __init__(self, interactive=False):
+    def __init__(self, file=None, interactive=False):
         self.action_dict = {0 : "wait", 1 : "buy", 2 : "sell"}
-        self.market = databank(interactive=interactive)
+        self.market = databank(file=file, interactive=interactive)
         self.customer = account(self.market)
         self.reset()
     def _reset(self, t):
@@ -138,8 +139,8 @@ class env:
         elif self.action_dict[a[0]] == "sell":
             self.customer.sell(1)
         self.market.step()
-        r = (self.customer.value - val) / self.market.price
-        d = False if self.t < self.market.end else True
+        r = np.array([(self.customer.value - val) / self.market.price])
+        d = np.array([False if self.t < self.market.end else True])
         return r, self.get_state(), d
 
     @property
