@@ -91,7 +91,6 @@ class account:
 
     def reset(self, max_stock=10, max_cash=10):
         #reset account at a given price. you get unif(1,max_stock) stocks, and cash enough to buy another unif(1,max_cash)
-        price = self.market.price # price of stock
         self.stock_count = np.random.randint(1, high=max_stock+1)
         self.cash = np.random.randint(1, high=max_cash) * self.market.price
 
@@ -109,6 +108,9 @@ class account:
     def get_state(self):
         return np.array([self.cash / self.market.price, self.stock_count ])
 
+    @property
+    def price(self):
+        return self.market.price
     @property
     def value(self):
         return self.cash + self.market.price * self.stock_count
@@ -130,8 +132,8 @@ class env:
     def get_state(self):
         return {"customer" : self.customer.get_state(), "market" : self.market.get_state()}
     def perform_action(self, a):
-        val = self.customer.value
-        self.customer.price = self.market.price
+        stock_count, cash, price = self.customer.stock_count, self.customer.cash, self.market.price
+        value_0 = self.customer.value
         if self.action_dict[a[0]] == "wait":
             pass
         elif self.action_dict[a[0]] == "buy":
@@ -139,9 +141,18 @@ class env:
         elif self.action_dict[a[0]] == "sell":
             self.customer.sell(1)
         self.market.step()
-        r = np.array([(self.customer.value - val) / self.market.price])
+        _r = self.customer.value - value_0
+        r = np.array( [ _r ] )
         d = np.array([False if self.t < self.market.end else True])
         return r, self.get_state(), d
+
+    @property
+    def state_len(self):
+        return self.market.state_len
+
+    @property
+    def ep_len(self):
+        return self.market.ep_len
 
     @property
     def t(self):
