@@ -8,22 +8,23 @@ from agents.replaybuffers import *
 
 settings = {
             #Agent:
-            "epsilon" : lambda t_now, t_max : 0.01*np.sqrt((t_max+1)/(0.1 * t_now + 1)),""
+            "epsilon" : lambda t_now, t_max : 0.1*np.sqrt((t_max+1)/(1 * t_now + 1)),""
             "print_every_n_steps" : 100,
             "train_after_n_steps" : 64,
             "n_samples_to_train_on" : 2048,
             "save_every_n_steps" : 100000,
             "reference_update_after_n_updates" : 5,
             "reference_update_mode" : "propagate", #swap or propagate
-            "model_type" : ff_model,
             "replay_buffer_type" : experience_replay_buffer,
-            "saver_dir" : "agents/models/saved/"
+            "saver_dir" : "agents/models/saved/",
+            "model_type" : ff_model,
             }
 
 class agent:
-    def __init__(self, name, session, env=None):
+    def __init__(self, name, session, env=None, eval_env=None):
         assert env is not None, "agent > you need to specify: agent(env=...)"
         self.env = env
+        self.eval_env = env if eval_env is None else eval_env
         self.name = name
         self.session = session
         self.experiences = settings["replay_buffer_type"](max_size=10000)
@@ -61,60 +62,48 @@ class agent:
         def stats_summary(s):
             summary = {}
             for x in s:
-                if x in ["market_inc", "value_inc", "relative_value_inc"]:
-                    summary[x] = gmean(s[x])
-                elif x in ["action_entropy", "action_count"]:
+                if x in ["action_entropy", "action_count"]:
                     _p = np.array(s["action_count"])
                     p = _p/_p.sum()
                     summary["action_entropy"] = ( -p * np.log(p) ).sum()
                 else:
                     summary[x] = np.mean(np.array(s[x]).ravel())
-                if verbose: print("\t", x, s[x])
             return summary
 
         for t in range(n_steps):
-            if t%(n_steps//10) == 0: print(".",end='', flush=True)
-
             #Reset?
             if d:
                 if not first:
                     n_episodes += 1
-                    market_inc = self.env.market.price / start_price
-                    value_inc = self.env.customer.value / start_val
-                    relative_value_inc = value_inc / market_inc
+                    market_inc = self.env.market.normalized_price - start_price
+                    value_inc = self.env.customer.normalized_value - start_val
                     stats["market_inc"].append(market_inc)
                     stats["value_inc"].append(value_inc)
-                    stats["relative_value_inc"].append(relative_value_inc)
                     stats["reward"].append(R)
+                    stats["relative_value_inc"].append(value_inc - market_inc)
                 s_prime = self.env.reset()
-                start_price = self.env.market.price
-                start_val = self.env.customer.value
-                R = 0
+                start_price = float(self.env.market.normalized_price)
+                start_val = float(self.env.customer.normalized_value)
+                R = 0.0
             #Perform action!
             s = s_prime
-            a, q = self.get_action(s, q=True, epsilon=settings["epsilon"](t, n_steps))
+            a, q = self.get_action(s, q=True)
             ###
             ###
             delta = np.amax(q, axis=-1) - np.amin(q, axis=-1)
+            stats["action_count"][a[0]] += 1
             stats["q_spread"].append(delta.ravel())
             stats["q_max"].append(np.amax(q, axis=-1).ravel())
             stats["q_min"].append(np.amin(q, axis=-1).ravel())
-            filter = ( delta > moving_avg_spread).astype(np.int)
-            n_filtered += np.sum(1-filter.ravel())
-            a = a * ( delta > moving_avg_spread).astype(np.int)
             ###
-            r, s_prime, d = self.env.perform_action(a)
+            r, s_prime, d, info = self.env.perform_action(a, eval=True)
             #Store experience
-            stats["action_count"][a[0]] += 1
             R += r
             first = False
-            moving_avg_spread *= 1.05 ** (2*int(n_filtered/(t+1)<0.9)-1)#-(np.sign(r))
             if t%100 == 0:
-                print("! : ", n_filtered/(t+1), moving_avg_spread)
-                ape = stats_summary(stats)
                 print("stats")
-                for x in ape:
-                    print("\t", x, "\t", ape[x])
+                for kw,val in stats_summary(stats).items():
+                    print("\t", kw, "\t", val)
         summary = stats_summary(stats)
         if verbose:
             print("{} ::::: Model performance:".format(self.name))
@@ -125,33 +114,30 @@ class agent:
     def train(self, n_steps):
         #Update timers...
         time_since_ref_update, time_since_training, tot_reward = 0, 0, 0.0
-        #Trajectory variables...
-        d, R = True, 0
 
-        def counter_factual(e):
-            s, a, r, sp, d = e
-            if a > 0:
-                r = -r
-                a = 3 - a
-            return (s, a, r, sp, d)
+        #Trajectory variables...
+        d, R = True, 0.0
 
         #Main loop
         for t in range(n_steps):
+
             #Reset?
             if d:
                 s_prime = self.env.reset()
                 tot_reward += R
                 print("Episode done! \n TOTAL REWARD = ", R, "\n", tot_reward/(t+1) , "<-- avg ep reward")
-                R = 0
+                R = 0.0
+
             #Perform action!
             s = s_prime
             a = self.get_action(s, epsilon=settings["epsilon"](t, n_steps))
-            r, s_prime, d = self.env.perform_action(a)
+            r, s_prime, d, info = self.env.perform_action(a)
+
             #Store experience
             R += r
             experience = (s,a,r,s_prime,d)
             self.experiences.add(experience)
-            self.experiences.add(counter_factual(experience))
+
             #Train?
             time_since_training += 1
             if (t+1)%settings["save_every_n_steps"] == 0:
@@ -177,22 +163,15 @@ class agent:
         self.printer.batch_end(ref_updates=ref_updates, returns=ret)
 
     def get_action(self,state, epsilon=None, q=False):
-        if type(state) is dict:
-            n = 1
-        else:
-            n = len(state)
+        n = 1 if type(state) is dict else len(state)
         qs = self.get_q(state)
         a = np.argmax(qs, axis=-1).reshape((n,))
-        return (a, qs) if q else a
-
-    def get_q(self,state, epsilon=None):
-        if type(state) is dict:
-            n = 1
-        else:
-            n = len(state)
         if epsilon is not None:
             if np.random.uniform() < epsilon:
-                return np.random.randint(3, size=(n,))
+                a = np.random.randint(self.env.n_actions, size=(n,))
+        return (a, qs) if q else a
+
+    def get_q(self,state):
         qs = self.model_0.eval(state)
         return qs
 
@@ -206,9 +185,9 @@ class agent:
 
     def save_model(self, global_step=0):
         self.saver.save(self.session, settings["saver_dir"]+self.name, global_step=global_step)
-    def load_model(self, path):
-        self.saver.restore(self.session, settings["saver_dir"]+path)
+    def load_model(self, version):
+        self.saver.restore(self.session, settings["saver_dir"]+self.name+"-"+version)
 
     @property
     def current_eval(self):
-        return  dict(zip( [self.env.actions[i] for i in range(3)], self.eval(self.env.t)[0] ))
+        return  dict(zip( [self.env.actions[i] for i in range(self.env.n_actions)], self.eval(self.env.t)[0] ))
