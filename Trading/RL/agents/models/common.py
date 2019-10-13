@@ -7,6 +7,7 @@ def fc(x, n_hidden=2, hidden_size=2048, out_size=3):
     ret = tf.layers.dense(x, out_size, activation=tf.keras.activations.linear)
     return ret
 
+
 #has 2 heads... one for conv, one for vec
 def conv(in_seq, in_vec, n_hidden=2, n_filters=32, filter_size=8, out_size=3):
     x = in_seq-1
