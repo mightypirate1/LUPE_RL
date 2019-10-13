@@ -1,7 +1,10 @@
 import tensorflow as tf
 
-from env import env
+import env.builder
 from agents.dqn import agent
+
+project = "ape"
+env_str = "SingleStock-v0"
 
 ###
 load  = None
@@ -10,14 +13,15 @@ eval  = True
 demo  = False
 
 ###
-# load  = "ape-900000"
+# load  = "700000"
 # train = False
 
-e = env()
-# e = env(file="LUPE.ST.csv")
+e      = env.builder.build(env_str)
+# e_eval = env.builder.build(env_str, eval=True)
 
+agent_str = env_str + "/" + project
 with tf.Session() as session:
-    a = agent( "ape", session, env=e)
+    a = agent( agent_str, session, env=e)
     session.run(tf.global_variables_initializer())
     if load is not None:
         a.load_model(load)
