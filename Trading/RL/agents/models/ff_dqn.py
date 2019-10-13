@@ -8,8 +8,8 @@ settings = {
             "gamma" : 0.99,
             #Training params
             "minibatch_size" : 256,
-            "lr" : lambda x : (1-x) * 1.0 * 10**-5,
-            "nn_type" : "conv", #"dense",
+            "lr" : lambda x : (1-x) * 1.0 * 10**-6,
+            "nn_type" : "conv", #"dense", #"conv"
             }
 
 class ff_model:
@@ -40,7 +40,7 @@ class ff_model:
                                       self.input_vec_tf,
                                       n_hidden=4,
                                       n_filters=32,
-                                      filter_size=32,
+                                      filter_size=16,
                                       out_size=len(env.actions),
                                     )
             self.lr_tf = tf.placeholder(tf.float16, shape=[], name="lr")
@@ -122,7 +122,7 @@ class ff_model:
         return ret
 
     def create_training_and_loss_ops(self):
-        mask_tf = tf.cast(tf.one_hot(self.action_tf, 3), dtype=tf.float16)
+        mask_tf = tf.cast(tf.one_hot(self.action_tf, self.env.n_actions), dtype=tf.float16)
         masked_output_tf = tf.multiply( self.output_tf, mask_tf)
         diff_tf = tf.reduce_sum(masked_output_tf, axis=-1) - self.target_q_tf
         loss_tf = tf.reduce_mean( tf.abs(diff_tf), name="loss" )
@@ -149,20 +149,26 @@ class ff_model:
         return assign_ops, assign_values
 
     def state_unload(self, s):
+        components = ["Open", "High", "Low", "Close", "Adj Close", "Volume"]
         if type(s) is np.array or type(s) is np.ndarray:
             assert False, "I think you want to be aware if this happens, so I terminate here..."
             return s
         if type(s) is list:
             return [self.state_unload(x) for x in s]
+
+        w_price = s["market"]["w_price"].values[0]
+        w_vol   = s["market"][ "w_vol" ].values[0]
+        market_data = s["market"][components] / w_price
+        market_data["Volume"] = market_data["Volume"] * (w_price / w_vol)
         if settings["nn_type"] == "dense":
             return np.concatenate(
                                     (
                                      s["customer"].reshape((1,-1)),
-                                     s["market"].to_numpy().reshape((1,-1))
+                                     market_data.to_numpy().reshape((1,-1))
                                     ),
                                     axis=-1
                                  )
         if settings["nn_type"] == "conv":
-            seq = s["market"].to_numpy().reshape((1,self.env.state_len,6))
+            seq = market_data.to_numpy().reshape((1,self.env.state_len,6))
             vec = s["customer"].reshape((1, -1))
             return seq, vec
